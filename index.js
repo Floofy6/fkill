@@ -262,9 +262,7 @@ export default async function fkill(inputs, options = {}) {
 		}
 	})));
 
-	const exists = await processExistsMultiple([...parsedInputsMap.values()]);
-
-	const errors = [];
+	const killErrors = [];
 
 	const handleKill = async input => {
 		const parsedInput = parsedInputsMap.get(input);
@@ -272,16 +270,25 @@ export default async function fkill(inputs, options = {}) {
 		try {
 			await killWithLimits(input, options);
 		} catch (error) {
-			if (!exists.get(parsedInput)) {
-				errors.push(`Killing process ${input} failed: Process doesn't exist`);
-				return;
-			}
-
-			errors.push(`Killing process ${input} failed: ${error.message.replace(/.*\n/, '').replace(/kill: \d+: /, '').trim()}`);
+			killErrors.push({input, parsedInput, error});
 		}
 	};
 
 	await Promise.all(inputs.map(input => handleKill(input)));
+
+	const errors = [];
+	if (killErrors.length > 0) {
+		const exists = await processExistsMultiple(killErrors.map(({parsedInput}) => parsedInput));
+
+		for (const {input, parsedInput, error} of killErrors) {
+			if (!exists.get(parsedInput)) {
+				errors.push(`Killing process ${input} failed: Process doesn't exist`);
+				continue;
+			}
+
+			errors.push(`Killing process ${input} failed: ${error.message.replace(/.*\n/, '').replace(/kill: \d+: /, '').trim()}`);
+		}
+	}
 
 	if (errors.length > 0 && !options.silent) {
 		throw new AggregateError(errors, 'Failed to kill processes');
