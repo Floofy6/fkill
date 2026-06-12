@@ -31,6 +31,21 @@ async function waitForReady(pid) {
 	}
 }
 
+async function waitForTreeReady(pid) {
+	const readyFile = path.join(os.tmpdir(), `fkill-tree-ready-${pid}`);
+	const timeout = 2000;
+	const start = Date.now();
+	while (!fs.existsSync(readyFile)) {
+		if (Date.now() - start > timeout) {
+			throw new Error(`Process tree ${pid} did not become ready within ${timeout}ms`);
+		}
+
+		await delay(10); // eslint-disable-line no-await-in-loop
+	}
+
+	return Number(fs.readFileSync(readyFile, 'utf8'));
+}
+
 test('pid', async () => {
 	const pid = await noopProcess();
 	await fkill(pid, {force: true});
@@ -301,5 +316,33 @@ if (process.platform !== 'win32') {
 		await fkill(-pid, {force: true});
 
 		await noopProcessKilled(pid);
+	});
+
+	test('tree kills child processes by default', async () => {
+		const parent = childProcess.spawn(process.execPath, ['fixture-tree.js'], {
+			stdio: 'ignore',
+		});
+		const childPid = await waitForTreeReady(parent.pid);
+
+		assert.strictEqual(await processExists(parent.pid), true);
+		assert.strictEqual(await processExists(childPid), true);
+
+		await fkill(parent.pid, {force: true});
+		await noopProcessKilled(parent.pid);
+		await noopProcessKilled(childPid);
+	});
+
+	test('tree option can be disabled', async () => {
+		const parent = childProcess.spawn(process.execPath, ['fixture-tree.js'], {
+			stdio: 'ignore',
+		});
+		const childPid = await waitForTreeReady(parent.pid);
+
+		await fkill(parent.pid, {force: true, tree: false});
+		await noopProcessKilled(parent.pid);
+		assert.strictEqual(await processExists(childPid), true);
+
+		await fkill(childPid, {force: true});
+		await noopProcessKilled(childPid);
 	});
 }

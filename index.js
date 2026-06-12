@@ -196,6 +196,63 @@ const getCurrentProcessParentsPID = processes => {
 	return pids;
 };
 
+const matchesProcessName = (processName, input, options) => {
+	if (options.ignoreCase) {
+		return processName.toLowerCase() === input.toLowerCase();
+	}
+
+	return processName === input;
+};
+
+const getDescendantPids = (pid, processes) => {
+	const childrenByParentPid = new Map();
+
+	for (const process_ of processes) {
+		const children = childrenByParentPid.get(process_.ppid) ?? [];
+		children.push(process_.pid);
+		childrenByParentPid.set(process_.ppid, children);
+	}
+
+	const descendants = [];
+	const stack = [...(childrenByParentPid.get(pid) ?? [])];
+
+	while (stack.length > 0) {
+		const childPid = stack.pop();
+		descendants.push(childPid);
+		stack.push(...(childrenByParentPid.get(childPid) ?? []));
+	}
+
+	return descendants.reverse();
+};
+
+const nonWindowsKillTree = async (input, options) => {
+	if (typeof input === 'number' && input < 0) {
+		await kill(input, options);
+		return;
+	}
+
+	const processes = await psList();
+	const targetPids = typeof input === 'number'
+		? [input]
+		: processes
+			.filter(process_ => matchesProcessName(process_.name, input, options))
+			.map(process_ => process_.pid);
+
+	if (targetPids.length === 0) {
+		await kill(input, options);
+		return;
+	}
+
+	const pids = [...new Set(targetPids.flatMap(pid => [
+		...getDescendantPids(pid, processes),
+		pid,
+	]))].filter(pid => pid !== process.pid);
+
+	await Promise.all(pids.map(async pid => {
+		await kill(pid, options);
+	}));
+};
+
 const waitForProcessExit = async (parsedInputsMap, timeout, silent) => {
 	const endTime = Date.now() + timeout;
 	let interval = ALIVE_CHECK_MIN_INTERVAL;
@@ -243,6 +300,11 @@ const killWithLimits = async (input, options) => {
 				await kill(ps.pid, options);
 			}
 		}));
+		return;
+	}
+
+	if (process.platform !== 'win32' && options.tree !== false) {
+		await nonWindowsKillTree(input, options);
 		return;
 	}
 
